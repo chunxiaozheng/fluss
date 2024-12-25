@@ -16,22 +16,36 @@
 
 package com.alibaba.fluss.connector.spark.table;
 
+import com.alibaba.fluss.config.ConfigOption;
+import com.alibaba.fluss.config.ConfigOptions;
+import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.connector.spark.SparkConnectorOptions;
+import com.alibaba.fluss.connector.spark.sink.FlussWriteBuilder;
 import com.alibaba.fluss.connector.spark.utils.SparkConversions;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.shaded.guava32.com.google.common.collect.ImmutableSet;
 
+import org.apache.spark.sql.connector.catalog.SupportsRead;
+import org.apache.spark.sql.connector.catalog.SupportsWrite;
 import org.apache.spark.sql.connector.catalog.Table;
 import org.apache.spark.sql.connector.catalog.TableCapability;
 import org.apache.spark.sql.connector.expressions.Transform;
+import org.apache.spark.sql.connector.read.ScanBuilder;
+import org.apache.spark.sql.connector.write.LogicalWriteInfo;
+import org.apache.spark.sql.connector.write.WriteBuilder;
 import org.apache.spark.sql.types.StructType;
+import org.apache.spark.sql.util.CaseInsensitiveStringMap;
 
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 
 /** spark table. */
-public class SparkTable implements Table {
+public class SparkTable implements Table, SupportsWrite, SupportsRead {
+
+    private static final Set<TableCapability> CAPABILITIES =
+            ImmutableSet.of(TableCapability.BATCH_WRITE);
 
     private final TablePath tablePath;
     private final TableDescriptor tableDescriptor;
@@ -74,6 +88,30 @@ public class SparkTable implements Table {
 
     @Override
     public Set<TableCapability> capabilities() {
-        return Collections.emptySet();
+        return CAPABILITIES;
+    }
+
+    @Override
+    public ScanBuilder newScanBuilder(CaseInsensitiveStringMap caseInsensitiveStringMap) {
+        return null;
+    }
+
+    @Override
+    public WriteBuilder newWriteBuilder(LogicalWriteInfo logicalWriteInfo) {
+        return new FlussWriteBuilder(
+                tablePath, sparkSchema, tableDescriptor, toFlussClientConfig());
+    }
+
+    private Configuration toFlussClientConfig() {
+        Configuration flussConfig = new Configuration();
+        flussConfig.setString(ConfigOptions.BOOTSTRAP_SERVERS.key(), bootstrapServers);
+
+        // forward all client configs
+        for (ConfigOption<?> option : SparkConnectorOptions.CLIENT_OPTIONS) {
+            if (properties.containsKey(option.key())) {
+                flussConfig.setString(option.key(), properties.get(option.key()));
+            }
+        }
+        return flussConfig;
     }
 }

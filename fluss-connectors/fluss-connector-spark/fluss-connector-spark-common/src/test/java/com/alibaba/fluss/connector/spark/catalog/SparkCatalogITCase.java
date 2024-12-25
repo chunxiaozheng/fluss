@@ -16,15 +16,10 @@
 
 package com.alibaba.fluss.connector.spark.catalog;
 
-import com.alibaba.fluss.client.Connection;
-import com.alibaba.fluss.client.ConnectionFactory;
-import com.alibaba.fluss.client.admin.Admin;
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.connector.spark.SparkTestBase;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.server.testutils.FlussClusterExtension;
 import com.alibaba.fluss.types.BigIntType;
 import com.alibaba.fluss.types.BooleanType;
 import com.alibaba.fluss.types.BytesType;
@@ -40,74 +35,20 @@ import com.alibaba.fluss.types.StringType;
 import com.alibaba.fluss.types.TimestampType;
 import com.alibaba.fluss.types.TinyIntType;
 
-import org.apache.spark.SparkConf;
 import org.apache.spark.sql.AnalysisException;
-import org.apache.spark.sql.Dataset;
-import org.apache.spark.sql.Row;
-import org.apache.spark.sql.SparkSession;
 import org.apache.spark.sql.catalyst.analysis.NamespaceAlreadyExistsException;
 import org.apache.spark.sql.catalyst.analysis.NoSuchNamespaceException;
 import org.apache.spark.sql.catalyst.analysis.TableAlreadyExistsException;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.RegisterExtension;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** IT case for {@link com.alibaba.fluss.connector.spark.catalog.SparkCatalog}. */
-public class SparkCatalogITCase {
-
-    private static final Logger LOG = LoggerFactory.getLogger(SparkCatalogITCase.class);
-
-    private static final String DB = "my_db";
-    private static final String TABLE = "my_table";
-
-    @RegisterExtension
-    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
-            FlussClusterExtension.builder().setNumOfTabletServers(1).build();
-
-    private static SparkSession spark;
-    private static Admin admin;
-
-    @BeforeAll
-    public static void beforeAll() {
-        Configuration flussConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
-        Map<String, String> configs = getSparkConfigs(flussConf);
-        SparkConf sparkConf =
-                new SparkConf().setAppName("bss-spark-unit-tests").setMaster("local[*]");
-        configs.forEach(sparkConf::set);
-        spark = SparkSession.builder().config(sparkConf).getOrCreate();
-        spark.sparkContext().setLogLevel("WARN");
-
-        Connection connection = ConnectionFactory.createConnection(flussConf);
-        admin = connection.getAdmin();
-    }
-
-    @AfterAll
-    public static void afterAll() {
-        try {
-            spark.close();
-            admin.close();
-        } catch (Exception e) {
-            // ignore
-        }
-    }
-
-    @AfterEach
-    public void afterEach() {
-        sql("DROP TABLE IF EXISTS fluss_catalog." + DB + "." + TABLE);
-        sql("DROP DATABASE IF EXISTS fluss_catalog." + DB);
-    }
+public class SparkCatalogITCase extends SparkTestBase {
 
     @Test
     public void createDatabaseTest() {
@@ -392,26 +333,5 @@ public class SparkCatalogITCase {
         assertThat(comments.get(0)).isEqualTo("id comment test");
         assertThat(comments.get(1)).isEqualTo("first name comment test");
         assertThat(comments.get(2)).isNull();
-    }
-
-    private static Map<String, String> getSparkConfigs(Configuration flussConf) {
-        Map<String, String> configs = new HashMap<>();
-        configs.put("spark.sql.catalog.fluss_catalog", SparkCatalog.class.getName());
-        configs.put(
-                "spark.sql.catalog.fluss_catalog.bootstrap.servers",
-                String.join(",", flussConf.get(ConfigOptions.BOOTSTRAP_SERVERS)));
-        return configs;
-    }
-
-    public static Dataset<Row> sql(String sqlText) {
-        Dataset<Row> ds = spark.sql(sqlText);
-        if (ds.columns().length == 0) {
-            LOG.info("+----------------+");
-            LOG.info("|  Empty Result  |");
-            LOG.info("+----------------+");
-        } else {
-            ds.show(20, 50);
-        }
-        return ds;
     }
 }

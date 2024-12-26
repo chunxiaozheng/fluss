@@ -21,6 +21,7 @@ import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.connector.spark.SparkConnectorOptions;
 import com.alibaba.fluss.connector.spark.sink.FlussWriteBuilder;
+import com.alibaba.fluss.connector.spark.source.FlussScanBuilder;
 import com.alibaba.fluss.connector.spark.utils.SparkConversions;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
@@ -45,7 +46,7 @@ import java.util.Set;
 public class SparkTable implements Table, SupportsWrite, SupportsRead {
 
     private static final Set<TableCapability> CAPABILITIES =
-            ImmutableSet.of(TableCapability.BATCH_WRITE);
+            ImmutableSet.of(TableCapability.BATCH_WRITE, TableCapability.BATCH_READ);
 
     private final TablePath tablePath;
     private final TableDescriptor tableDescriptor;
@@ -93,7 +94,7 @@ public class SparkTable implements Table, SupportsWrite, SupportsRead {
 
     @Override
     public ScanBuilder newScanBuilder(CaseInsensitiveStringMap caseInsensitiveStringMap) {
-        return null;
+        return new FlussScanBuilder(tablePath, sparkSchema, tableDescriptor, toFlussClientConfig());
     }
 
     @Override

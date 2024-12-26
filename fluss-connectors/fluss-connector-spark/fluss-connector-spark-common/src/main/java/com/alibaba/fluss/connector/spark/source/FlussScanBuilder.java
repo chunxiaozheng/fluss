@@ -1,0 +1,163 @@
+/*
+ * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package com.alibaba.fluss.connector.spark.source;
+
+import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.types.RowType;
+
+import org.apache.spark.sql.connector.read.Scan;
+import org.apache.spark.sql.connector.read.ScanBuilder;
+import org.apache.spark.sql.connector.read.SupportsPushDownFilters;
+import org.apache.spark.sql.connector.read.SupportsPushDownLimit;
+import org.apache.spark.sql.connector.read.SupportsPushDownRequiredColumns;
+import org.apache.spark.sql.sources.EqualTo;
+import org.apache.spark.sql.sources.Filter;
+import org.apache.spark.sql.types.StructField;
+import org.apache.spark.sql.types.StructType;
+
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+
+/** Spark's {@link ScanBuilder} implementation for Fluss. */
+public class FlussScanBuilder
+        implements ScanBuilder,
+                SupportsPushDownLimit,
+                SupportsPushDownFilters,
+                SupportsPushDownRequiredColumns {
+
+    private final TablePath tablePath;
+    private final TableDescriptor tableDescriptor;
+    private final Configuration flussConfig;
+
+    private StructType sparkSchema;
+    private int limit;
+    private Filter[] pushedFilters = new Filter[0];
+    private int[] projectedFields = null;
+
+    public FlussScanBuilder(
+            TablePath tablePath,
+            StructType sparkSchema,
+            TableDescriptor tableDescriptor,
+            Configuration flussConfig) {
+        this.tablePath = tablePath;
+        this.tableDescriptor = tableDescriptor;
+        this.flussConfig = flussConfig;
+        // firstly, assign the table schema to the variable,
+        // and then update it when columns pruned
+        this.sparkSchema = sparkSchema;
+    }
+
+    @Override
+    public Scan build() {
+        return new FlussScan(
+                tablePath,
+                sparkSchema,
+                tableDescriptor,
+                flussConfig,
+                limit,
+                pushedFilters,
+                projectedFields);
+    }
+
+    @Override
+    public boolean pushLimit(int limit) {
+        this.limit = limit;
+        return false;
+    }
+
+    @Override
+    public Filter[] pushFilters(Filter[] filters) {
+        // only apply pk equal filters when all the condition satisfied:
+        // (1) batch execution mode,
+        // (2) the table is a pk table,
+        // (3) all filters are pk field equal expression
+        if (!tableDescriptor.hasPrimaryKey()) {
+            return filters;
+        }
+        List<Filter> supportedFilters = new ArrayList<>();
+        List<Filter> unSupportedFilters = new ArrayList<>();
+        Set<String> pkNames =
+                new HashSet<>(tableDescriptor.getSchema().getPrimaryKey().get().getColumnNames());
+        for (Filter filter : filters) {
+            if (filter instanceof EqualTo && pkNames.contains(((EqualTo) filter).attribute())) {
+                supportedFilters.add(filter);
+            } else {
+                unSupportedFilters.add(filter);
+            }
+        }
+        if (supportedFilters.size() != pkNames.size()) {
+            return filters;
+        }
+
+        this.pushedFilters = supportedFilters.toArray(new Filter[0]);
+        return unSupportedFilters.toArray(new Filter[0]);
+    }
+
+    @Override
+    public Filter[] pushedFilters() {
+        return pushedFilters;
+    }
+
+    @Override
+    public void pruneColumns(StructType structType) {
+        if (!isPruned(structType)) {
+            return;
+        }
+        // update the variable if column pruned happened
+        sparkSchema = structType;
+        // construct project fields
+        StructField[] sparkFields = structType.fields();
+        projectedFields = new int[sparkFields.length];
+        RowType rowType = tableDescriptor.getSchema().toRowType();
+        for (int i = 0; i < sparkFields.length; i++) {
+            int index = rowType.getFieldIndex(sparkFields[i].name());
+            if (index < 0) {
+                throw new UnsupportedOperationException(
+                        "Invalid field name " + sparkFields[i].name() + " in schema.");
+            }
+            projectedFields[i] = index;
+        }
+    }
+
+    private boolean isPruned(StructType prunedSparkSchema) {
+        // the init sparkSchema was generated by fluss table, when it includes CHAR type,
+        // it uses CHAR type to represent it, while prunedSparkSchema uses STRING type to
+        // represent it, so the equals method returns false, although they are equivalent
+        // in the process.
+        // therefore, here, we first judge through equals method, and if false,
+        // then judge the number and order of fields
+        // (when judging the order of fields, only use the name to judge)
+        if (sparkSchema.equals(prunedSparkSchema)) {
+            return false;
+        }
+        StructField[] sparkFields = sparkSchema.fields();
+        StructField[] prunedFields = prunedSparkSchema.fields();
+        if (sparkFields.length != prunedFields.length) {
+            return true;
+        }
+        for (int i = 0; i < sparkFields.length; i++) {
+            if (!sparkFields[i].name().equals(prunedFields[i].name())) {
+                return true;
+            }
+        }
+        return false;
+    }
+}
